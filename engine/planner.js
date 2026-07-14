@@ -19,9 +19,12 @@
 var Planner = (function () {
   'use strict';
 
-  var Prng_ = (typeof Prng !== 'undefined') ? Prng : require('./prng.js');
-  var Scales_ = (typeof Scales !== 'undefined') ? Scales : require('./scales.js');
-  var Walk_ = (typeof Walk !== 'undefined') ? Walk : require('./walk.js');
+  // Under Node (module system present) always require; in Scripter the
+  // concatenated bundle has already defined these as top-level vars. Checking
+  // `module` first keeps Node behavior independent of any global bindings.
+  var Prng_ = (typeof module !== 'undefined') ? require('./prng.js') : Prng;
+  var Scales_ = (typeof module !== 'undefined') ? require('./scales.js') : Scales;
+  var Walk_ = (typeof module !== 'undefined') ? require('./walk.js') : Walk;
 
   var EPS = 1e-9;
 
