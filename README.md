@@ -5,9 +5,11 @@ controls for rhythm, density, melodic motion, phrasing, and randomness — and f
 to any Logic Pro instrument. Blues-rock / jam-band phrasing sensibility: pentatonic-leaning,
 percussive, phrases that breathe and restate ideas.
 
-The full design brief lives in [spec/SPEC.md](spec/SPEC.md). Current state: **Phase 0
-complete (M0–M5)** — the musical engine plus the Logic Scripter wrapper. The JUCE `aumi`
-port (M7–M8) starts after the listening pass (M6).
+The full design brief lives in [spec/SPEC.md](spec/SPEC.md), and every knob on the
+panel is explained — with use cases and starting-point recipes — in the
+**[parameter guide](PARAMETERS.md)**. Current state: **Phase 0 complete (M0–M5)** —
+the musical engine plus the Logic Scripter wrapper. The JUCE `aumi` port (M7–M8)
+starts after the listening pass (M6).
 
 ## Layout
 
@@ -32,7 +34,8 @@ npm run build:copy
 Then: instrument track → **MIDI FX slot → Scripter → Open Script in Editor** →
 ⌘A ⌘V → **Run Script**. Load any instrument below it, press Play. Save as a
 Scripter preset to keep it. Same seed + same parameters = the same solo on
-playback, freeze, and bounce.
+playback, freeze, and bounce. See the [parameter guide](PARAMETERS.md) for what
+each control does and some starting points.
 
 ## Render takes without Logic
 
