@@ -260,6 +260,17 @@ var Planner = (function () {
   function planRepeat(params, derived, k, depth, cache) {
     var base = plan(params, derived, k - 1, cache);
     var ladder = derived.ladder;
+
+    // A live parameter change can leave the previous phrase's cached plan
+    // built against a different ladder (§8.2 keeps the sounding phrase's
+    // plan). If its contour no longer fits this ladder, restate nothing —
+    // generate fresh instead of emitting out-of-ladder indices.
+    for (var b = 0; b < base.ladderIndices.length; b++) {
+      if (base.ladderIndices[b] < 0 || base.ladderIndices[b] >= ladder.pitches.length) {
+        return planFresh(params, derived, k);
+      }
+    }
+
     var rng = phraseRng(params, k);
     rng(); // draw #1: wants-repeat roll (true — that is why we are here)
 
