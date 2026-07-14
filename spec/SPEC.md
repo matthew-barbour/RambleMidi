@@ -94,6 +94,14 @@ Consequences, all of them desirable:
 
 Use a seeded PRNG (`mulberry32` or `xorshift32`). **Never call `Math.random()` anywhere in the planner.**
 
+### Bounce compatibility — no JUCE required
+
+Both real-time and offline (faster-than-real-time) bounce work correctly with the **Phase 0 Scripter build**, for the same reason bounce works at all: a bounce plays the project transport start-to-finish and records whatever comes out the output bus. Ramble generates MIDI into a Logic instrument; the instrument produces audio; the bounce captures that audio like it would capture a human playing the keyboard live. The MIDI FX plugin's format — Scripter script vs. JUCE `.component` — is irrelevant to bouncing.
+
+Offline bounce specifically relies on the plugin processing against the **DAW's internal transport position rather than the wall clock**, which is exactly how `GetTimingInfo()`/`ProcessMIDI()` already work (§8.1). Nothing in Phase 0 needs to change for this to work — it has been true since M5.
+
+This means **capturing a finished take has never required Phase 1.** Bounce is a complete alternative to both the §9.5.2 Print Settings workaround and the §10 drag-to-DAW feature — slower to iterate with (no scrubbing back to "that one good phrase" without re-bouncing), but it needs nothing beyond what you already have running.
+
 ---
 
 ## 4. Musical model: key, scale, register
@@ -339,6 +347,7 @@ Manufacturer/plugin codes: 4 characters each, and the **manufacturer code must n
 | 23 | Seed | lin | 0–9999 | 1 | |
 | 24 | Reseed | momentary | — | — | randomizes Seed |
 | 25 | Trigger Mode | menu | Transport, Latch | Transport | see §8.3 |
+| 26 | Print Settings | momentary | — | — | §9.5.2 — Traces a ready-to-paste CLI line reproducing the current state |
 
 **Octave Span = 1 forces Octave Shift to 0** — there is nowhere to shift to. Gray it out in the GUI if the framework allows; in Scripter, just ignore the value.
 
@@ -443,9 +452,73 @@ Because generation is position-deterministic, **the MIDI file contains exactly t
 
 ---
 
+## 9.5 Phase 0.5 — remove the friction without porting anything
+
+Two cheap changes that eliminate most of the reasons people reach for the JUCE port. Do these **before** deciding whether Phase 1 is worth it.
+
+### 9.5.1 Stop pasting the script
+
+Pasting on every session is not the actual workflow — it's the *development* workflow leaking into the *playing* workflow. Once the script is stable:
+
+- **Save it as a Scripter preset.** Scripter's own preset menu stores the script text along with the parameter values. Loading the preset restores both. No pasting.
+- **Better: save the whole channel strip.** Ramble in the MIDI FX slot plus your instrument below it, saved as a channel strip setting (or a Logic patch / track template). Now "start a Ramble track" is one click, instrument and all.
+- Scripter's script text and parameter values are stored in the plugin instance, so they save with the project too. Verify this once on your own machine: save, quit, reopen, hit play. Thirty seconds to confirm, and it changes how you think about the port.
+
+You then only re-paste when you **change the engine** — which is a development event, not a musical one.
+
+### 9.5.2 "Print Settings" — capture a solo you like, without the port
+
+The one thing Scripter genuinely can't do is hand you a MIDI region. But the CLI already can — the only obstacle is that reproducing a Scripter take from the terminal means re-typing all 25 parameter values by hand.
+
+So don't type them. Add parameter **#26, Print Settings** (momentary). On click, `Trace()` a ready-to-paste CLI invocation of the plugin's *current* state:
+
+```
+node tools/render.js --seed 4471 --bars 32 --root A --scale minor-pentatonic \
+  --low-octave C3 --span 2 --focus 40 --octave-shift 20 --grid 1/8 --density 70 \
+  --note-length 50 --swing 58 --leap 25 --dir-hold 70 --gravity 60 --variability 50 \
+  --phrase-length 2 --breath 25 --motif 40 --out solo.mid
+```
+
+The workflow becomes: hear a solo you like → click **Print Settings** → copy the line out of Scripter's console → paste into the terminal → drag `solo.mid` onto a track. Call it twenty seconds.
+
+`tools/render.js` must therefore accept **every** engine parameter as a flag, and the flag names must match the printed line exactly. This is a half-hour of work and it captures most of the value of the drag-to-DAW feature that would otherwise cost you a weekend of C++.
+
+**Trace from `Idle()`, never from `ProcessMIDI()`** (§8.2). The momentary button sets a flag; `Idle()` notices it and prints.
+
+---
+
 ## 10. Phase 1 — JUCE port
 
-Only start this once the engine sounds good in Scripter.
+### 10.0 Is the port actually worth it?
+
+Only start this once the engine sounds good in Scripter — and only once you can name the specific friction you're trying to remove. Several of the usual arguments **do not apply to this project**, because the architecture already solved them:
+
+| Assumed reason to port | Reality |
+|---|---|
+| "JavaScript will be too slow" | The planner runs **once per phrase**, not per sample. This is a rounding error either way. The planner/scheduler split (§3) made the performance argument moot before it was ever raised. |
+| "I need automation" | Scripter's `PluginParameters` are already automatable in Logic. |
+| "It won't persist" | Script text and parameter values save with the project and with a Scripter preset (§9.5.1). |
+| "I need presets" | Scripter has its own preset system. |
+| "I need determinism" | Already in the engine (§3). Host-independent. |
+
+What the port **actually** buys you:
+
+| Real advantage | Why it matters |
+|---|---|
+| **Drag-to-DAW MIDI export** | The killer feature. Hear a solo, drag it from the plugin window straight onto a track, as a region. Scripter cannot do this at all — no UI, no file I/O. `DragAndDropContainer::performExternalDragDropOfFiles()` with a temp `.mid`. §9.5.2 gets you ~80% of this for ~1% of the effort, but it's still a copy-paste through a terminal. |
+| **A real panel** | Scripter gives you 26 controls in one tall scrolling list, in declaration order, no knobs, no grouping. JUCE gives you four labeled sections you can read at a glance. This is the difference between a tool you reach for and one you tolerate. |
+| **A phrase visualizer** | Draw the planned line — contour, density, register — so you can *see* what you're about to hear, and see what a knob did. Scripter cannot draw anything, ever. For a generative instrument this is a genuine capability, not a decoration. |
+| **One update, every project** | A Scripter script is frozen into each project at save time. Fix a bug and old projects still carry the old script. A `.component` updates globally. |
+| **Shareable** | Your drummer can install a `.component`. He is not going to paste a JavaScript file into Scripter. |
+
+### 10.0.1 Triggers — port when one of these is true
+
+- You keep hearing solos you want to keep, and the terminal round-trip has stopped being charming.
+- You've scrolled past twenty sliders to find Density for the tenth time today.
+- You want Ramble on four tracks in different keys, and you're tired of re-pasting after every engine fix.
+- You want to hand it to someone.
+
+**If none of these is true: don't port it. Go make music.** Phase 1 was always conditional. The good news is that the planner is pure and already tested, so the port is a translation job rather than a redesign — it will keep just fine until you actually want it.
 
 ### CMake
 
@@ -478,7 +551,15 @@ juce_add_plugin(Ramble
 
 ### GUI (minimal knobs panel)
 
-Four labeled sections matching §7 — Key & Range, Rhythm, Melody, Phrasing/Performance — as rows of `juce::Slider` rotaries with `ComboBox` for menus, plus the Reseed button. Bind everything through `SliderAttachment` / `ComboBoxAttachment`. No custom look-and-feel in v1; correctness and layout first.
+Four labeled sections matching §7 — Key & Register, Rhythm, Melody, Phrasing/Performance — as rows of `juce::Slider` rotaries with `ComboBox` for menus, plus the Reseed button. Bind everything through `SliderAttachment` / `ComboBoxAttachment`. No custom look-and-feel in v1; correctness and layout first.
+
+### The two features that justify the port
+
+**Drag-to-DAW MIDI export.** A drag handle in the plugin window that writes the upcoming N bars of planned phrases to a temp `.mid` and hands it to the OS drag session via `DragAndDropContainer::performExternalDragDropOfFiles()`. Drop it on a Logic track and it becomes a real, editable MIDI region — same mechanic as dragging a loop out of Logic's own Loop Browser. This is the whole reason to build a real plugin — it's the feature that turns Ramble from a live noisemaker into something you compose with, because it's the only way Ramble's output goes from "regenerated in real time, never persisted" to "a captured take." Reuse the same MIDI writer as `tools/render.js`; the notes are identical by construction.
+
+*Concrete flow:* Ramble running live in the MIDI FX slot over a piano patch. A phrase comes out great. Click-drag from inside the plugin window onto the arrange page → Logic creates a region on the target track containing exactly what just played → quantize it, transpose it, edit notes, bounce it, whatever. No terminal, no separate render step, no round-trip — the plugin *is* the source of the region. This is strictly better than the §9.5.2 Print Settings workaround; it's also the single hardest UI feature in this project. Real OS-level drag sessions initiated from inside a plugin window are fiddly — budget real time for M9, not an afternoon.
+
+**Phrase visualizer.** A small piano-roll strip drawing the current and next planned phrase — contour, density, register, where the octave shifts land. It makes the abstract knobs legible: turn Register Focus and *watch* the line tighten. Scripter cannot draw a single pixel, so this capability simply does not exist until Phase 1.
 
 ### Validate and install
 
@@ -502,10 +583,12 @@ Then Logic → **Plug-in Manager → Reset & Rescan Selection**. Ad-hoc signing 
 | **M4** | `tools/render.js` → `.mid` export | A rendered file dragged into Logic plays the same notes the planner printed |
 | **M5** | Scripter wrapper + build (§9) | Loads in the MIDI FX slot, plays through a Logic instrument, survives loop + stop + locate with **zero stuck notes** |
 | **M6** | Musical tuning pass — human in the loop | Section 12 checklist passes |
+| **M6.5** | Phase 0.5: Scripter preset + channel strip; Print Settings + full CLI flags (§9.5) | Clicking Print Settings yields a line that renders a `.mid` identical to what you just heard. **Stop here and decide (§10.0).** |
 | **M7** | JUCE port (§10) | `auval -v aumi Solo Rmbl` passes; appears in Logic's MIDI FX slot; output matches Scripter for the same seed and params |
-| **M8** | GUI + presets | All 23 parameters bound, automatable, and saved with the project |
+| **M8** | GUI + presets | All 26 parameters bound, automatable, and saved with the project |
+| **M9** | Drag-to-DAW export + phrase visualizer | Dragging from the plugin window drops a region on a Logic track containing exactly the notes it just played |
 
-M0–M4 require no DAW and no human. Run them to completion first.
+M0–M4 require no DAW and no human. Run them to completion first. **M6.5 is a decision point, not a formality** — do it, live with the result for a couple of weeks, and only then decide whether M7 onward is worth your weekends.
 
 ---
 
