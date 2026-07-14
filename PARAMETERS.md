@@ -4,6 +4,12 @@ What every knob on the Scripter panel does, what it's for, and where to start.
 This is the player's manual; the engineering rationale behind each control lives
 in [spec/SPEC.md](spec/SPEC.md).
 
+![The Ramble panel in Logic's Scripter: Key & Register, Rhythm, Melody, Phrasing, and Performance sections at their default settings](docs/panel.jpg)
+
+*The Phase-0 panel, as Scripter renders it (shown at the defaults). The JUCE
+plugin (M7–M8) will replace this with its own GUI; the controls and their
+behavior stay the same.*
+
 ## How Ramble thinks (read this first)
 
 Ramble improvises in **phrases**, not notes. At each phrase boundary it rolls
