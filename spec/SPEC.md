@@ -12,6 +12,18 @@ Work milestone by milestone (Section 11). Do not skip ahead to the plugin wrappe
 
 **Appendix A** covers prerequisites, cost, and the day-to-day development loop. Read it before setting up the repo — in particular, Phase 0 requires no Xcode, no CMake, and no JUCE.
 
+### Where this project stands
+
+Most of this document is written in the future tense. It is no longer future. As of 2026-08-15:
+
+- **Phase 0 (M0–M5): complete.** Engine, Scripter wrapper, render CLI, property tests.
+- **Phase 1 (M7–M8): complete.** The `aumi` AU plugin builds, passes `auval`, installs itself, carries a four-section GUI and six factory presets, and is proven note-for-note identical to the Scripter build by two parity harnesses.
+- **M9 is next** — drag-to-DAW MIDI export and the phrase visualizer.
+- **M6 and M6.5 were deliberately skipped.** The port was started without them, judging M9's drag-to-DAW export to supersede M6.5's Print Settings outright. Print Settings (parameter #26) was therefore **never implemented** — the panel has 25 parameters, not 26. See §11.
+- **The §12 listening test is still outstanding.** It is the one acceptance gate no amount of tooling can close, and it remains owed. Note that §12's item #7 — same seed, same solo — *is* now mechanically proven along the plugin-vs-Scripter axis by the parity suites, but nothing has yet been judged by ear.
+
+Sections 1–8 are the musical specification and remain accurate as written. Sections 9–11 and Appendix A carry as-built notes where reality diverged from the plan.
+
 ---
 
 ## 1. Scope and non-goals
@@ -404,22 +416,45 @@ Scripter is already sitting in the MIDI FX slot. It's JavaScript, it hot-reloads
 
 ### Repo layout
 
+*As built, including the Phase 1 additions. The JS engine and the C++ engine are
+kept in lockstep by `test/parity.test.js`; the Scripter wrapper and the C++
+scheduler by `test/scheduler-parity.test.js`. **Changing one side of either pair
+without the other breaks its suite — that is the point.***
+
 ```
 ramble/
-  engine/
+  engine/                        Phase 0 — the JS engine (still the reference)
     prng.js          mulberry32, hash32
     scales.js        scale tables, ladder construction
     walk.js          weighted pitch selection (§5)
     planner.js       phrase planning (§6) — the pure core
   scripter/
     wrapper.js       PluginParameters, ProcessMIDI, HandleMIDI, Reset
+  cpp/                           Phase 1 — the C++ port
+    engine/          header-only port of engine/*.js, one header per module
+      prng.h  scales.h  walk.h  planner.h
+    plugin/
+      Scheduler.h        port of wrapper.js's scheduling logic — JUCE-free
+      Params.h           APVTS layout + panel → engine params (§7)
+      Presets.h          factory presets = the PARAMETERS.md recipes
+      PluginProcessor.h/.cpp   the JUCE adapter
+      PluginEditor.h/.cpp      the four-section panel (§10 GUI)
+    tools/
+      render_main.cpp    ramble-render   — engine parity CLI
+      hostsim_main.cpp   ramble-hostsim  — scheduler parity harness
   tools/
     build.js         concatenates engine/*.js + scripter/wrapper.js → dist/
-    render.js        CLI: plan N bars, print grid, write .mid
-    harness.js       property tests
-  test/
+    render.js        CLI: plan N bars, print grid, write .mid (+ --json)
+    midifile.js      SMF writer/reader
+  test/              node --test; prng/scales/walk/planner/render/wrapper
+    parity.test.js             JS engine    vs cpp/engine     (M7a)
+    scheduler-parity.test.js   Scripter     vs cpp/plugin     (M7b)
+    scripter-host.js           mock Logic Scripter host
   dist/
-    Ramble.scripter.js
+    Ramble.scripter.js         committed build artifact
+  JUCE/                        pinned submodule, 8.0.15
+  CMakeLists.txt               engine CLIs + the AU plugin target
+  build/                       CMake build dir (gitignored)
 ```
 
 ### Scripter constraints — read these before writing a line
@@ -522,19 +557,46 @@ What the port **actually** buys you:
 
 ### CMake
 
+*As built — this block matches [`CMakeLists.txt`](../CMakeLists.txt). Keep them in sync.*
+
 ```cmake
 juce_add_plugin(Ramble
     FORMATS                     AU
     IS_MIDI_EFFECT              TRUE
+    AU_MAIN_TYPE                kAudioUnitType_MIDIProcessor
     NEEDS_MIDI_INPUT            TRUE
     NEEDS_MIDI_OUTPUT           TRUE
     IS_SYNTH                    FALSE
     PLUGIN_MANUFACTURER_CODE    Rmbl
     PLUGIN_CODE                 Solo
-    PRODUCT_NAME                "Ramble")
+    COMPANY_NAME                "Ramble"
+    BUNDLE_ID                   com.ramble.ramble
+    PRODUCT_NAME                "Ramble"
+    COPY_PLUGIN_AFTER_BUILD     TRUE)
 ```
 
-**Verify the built bundle's `Info.plist` declares AU type `aumi`.** If `IS_MIDI_EFFECT` alone doesn't produce it, force `AU_MAIN_TYPE kAudioUnitType_MIDIProcessor`. If the type is wrong, Logic will not show the plugin in the MIDI FX slot at all — and this is the #1 thing that goes wrong with JUCE MIDI FX builds.
+**Verify the built bundle's `Info.plist` declares AU type `aumi`.** If the type is wrong, Logic will not show the plugin in the MIDI FX slot at all — and this is the #1 thing that goes wrong with JUCE MIDI FX builds.
+
+**Resolved:** in JUCE 8, `IS_MIDI_EFFECT TRUE` *does* set the AU main type to `kAudioUnitType_MIDIProcessor` on its own (`JUCE/extras/Build/CMake/JUCEUtils.cmake`). The explicit `AU_MAIN_TYPE` above is belt-and-braces and self-documentation, not a fix. The built plist was checked with `plutil -p` and declares `"type" => "aumi"`. Note that `IS_MIDI_EFFECT` does **not** imply `NEEDS_MIDI_INPUT`/`NEEDS_MIDI_OUTPUT` at CMake level — the AU wrapper compensates, other formats would not, so set them.
+
+### The signing trap — do not remove the post-build step
+
+This one is invisible until Logic silently refuses to load the plugin, and it recurs on **every** build.
+
+macOS stamps `com.apple.FinderInfo` and provenance xattrs onto the freshly linked bundle. `codesign` then refuses JUCE's own ad-hoc re-sign with *"resource fork, Finder information, or similar detritus not allowed"*, and what lands in `~/Library/Audio/Plug-Ins/Components` is an **invalidly signed component** that Logic rejects at scan time. `auval` may still pass against the build directory, so this hides from the obvious check.
+
+The fix in `CMakeLists.txt` is a `POST_BUILD` step on `Ramble_AU` that strips xattrs and re-signs ad-hoc — applied to **both** the build artefact and the installed copy, because `COPY_PLUGIN_AFTER_BUILD` has already run by then:
+
+```cmake
+add_custom_command(TARGET Ramble_AU POST_BUILD
+    COMMAND xattr -cr "$<TARGET_BUNDLE_DIR:Ramble_AU>"
+    COMMAND codesign -f -s - "$<TARGET_BUNDLE_DIR:Ramble_AU>"
+    COMMAND xattr -cr "$ENV{HOME}/Library/Audio/Plug-Ins/Components/Ramble.component"
+    COMMAND codesign -f -s - "$ENV{HOME}/Library/Audio/Plug-Ins/Components/Ramble.component"
+    VERBATIM)
+```
+
+Verify with `codesign --verify --verbose=2` on the installed copy; it must say *"valid on disk"* and *"satisfies its Designated Requirement"*.
 
 ### Implementation notes
 
@@ -553,6 +615,10 @@ juce_add_plugin(Ramble
 
 Four labeled sections matching §7 — Key & Register, Rhythm, Melody, Phrasing/Performance — as rows of `juce::Slider` rotaries with `ComboBox` for menus, plus the Reseed button. Bind everything through `SliderAttachment` / `ComboBoxAttachment`. No custom look-and-feel in v1; correctness and layout first.
 
+**As built (M8):** exactly that, with two divergences. Binding uses the **standalone** `SliderParameterAttachment` / `ComboBoxParameterAttachment` / `ButtonParameterAttachment` classes rather than the `APVTS::…Attachment` wrappers — same machinery, but they bind a `RangedAudioParameter&` directly instead of a string ID, which is harder to get wrong. And the panel gained a **preset menu** this section never anticipated (see below). Seed is a `LinearBar` slider, not a rotary: a rotary across 0–9999 is unusable.
+
+**Factory presets.** The five Recipes from [PARAMETERS.md](../PARAMETERS.md), plus a Defaults baseline, live in `cpp/plugin/Presets.h` as deltas from the §7 defaults. They are exposed through the `AudioProcessor` program API, which the JUCE AU wrapper automatically republishes as **AU factory presets** — so they appear both in Ramble's own panel and in Logic's plugin header menu, and `auval` enumerates them by name. Two deliberate rules: presets **never touch Seed, Reseed, or Trigger Mode** (a preset is a *character*; resetting the take you are auditioning would be hostile), and preset application is gestureless `setValueNotifyingHost`. User presets are left to the host — Logic's "Save Setting…" already round-trips through `get/setStateInformation`.
+
 ### The two features that justify the port
 
 **Drag-to-DAW MIDI export.** A drag handle in the plugin window that writes the upcoming N bars of planned phrases to a temp `.mid` and hands it to the OS drag session via `DragAndDropContainer::performExternalDragDropOfFiles()`. Drop it on a Logic track and it becomes a real, editable MIDI region — same mechanic as dragging a loop out of Logic's own Loop Browser. This is the whole reason to build a real plugin — it's the feature that turns Ramble from a live noisemaker into something you compose with, because it's the only way Ramble's output goes from "regenerated in real time, never persisted" to "a captured take." Reuse the same MIDI writer as `tools/render.js`; the notes are identical by construction.
@@ -564,31 +630,48 @@ Four labeled sections matching §7 — Key & Register, Rhythm, Melody, Phrasing/
 ### Validate and install
 
 ```bash
-auval -v aumi Solo Rmbl
-cp -R Ramble.component ~/Library/Audio/Plug-Ins/Components/
+cmake --build build          # builds, signs, and installs
+auval -v aumi Solo Rmbl      # → AU VALIDATION SUCCEEDED
 ```
 
-Then Logic → **Plug-in Manager → Reset & Rescan Selection**. Ad-hoc signing is fine for personal use; notarization only matters if you distribute.
+**No manual copy step:** `COPY_PLUGIN_AFTER_BUILD TRUE` installs to `~/Library/Audio/Plug-Ins/Components/` on every build.
+
+`auval` passes as of M8, and it exercises more than load-and-instantiate — it enumerates the factory presets and sets each one in turn, so the program API is covered by the same gate.
+
+If Logic doesn't list the plugin: **Plug-in Manager → Reset & Rescan Selection**, and check the signature (see the signing trap above) before suspecting anything else. Logic also caches plugin UI code, so a GUI change may need Logic restarted to appear. Ad-hoc signing is fine for personal use; notarization only matters if you distribute.
 
 ---
 
 ## 11. Milestones
 
-| # | Deliverable | Done when |
-|---|---|---|
-| **M0** | Repo scaffold, `prng.js`, Node harness | `hash32(seed, n)` is stable; `mulberry32` reproduces a known sequence |
-| **M1** | Scales + ladder + weighted walk (§4–5) | Property tests pass: every pitch ∈ scale, every pitch ∈ [Low, High], `plan(seed, n)` is bit-identical across runs |
-| **M2** | Rhythm, breath, swing, velocity (§6.1–6.2) | Grid/swing math verified against hand-computed beat positions; note-offs never precede note-ons |
-| **M3** | Motif repetition + chain cap (§6.3) | Cold-planning phrase 200 touches ≤ 3 phrases; repeats are audibly restatements, not clones |
-| **M4** | `tools/render.js` → `.mid` export | A rendered file dragged into Logic plays the same notes the planner printed |
-| **M5** | Scripter wrapper + build (§9) | Loads in the MIDI FX slot, plays through a Logic instrument, survives loop + stop + locate with **zero stuck notes** |
-| **M6** | Musical tuning pass — human in the loop | Section 12 checklist passes |
-| **M6.5** | Phase 0.5: Scripter preset + channel strip; Print Settings + full CLI flags (§9.5) | Clicking Print Settings yields a line that renders a `.mid` identical to what you just heard. **Stop here and decide (§10.0).** |
-| **M7** | JUCE port (§10) | `auval -v aumi Solo Rmbl` passes; appears in Logic's MIDI FX slot; output matches Scripter for the same seed and params |
-| **M8** | GUI + presets | All 26 parameters bound, automatable, and saved with the project |
-| **M9** | Drag-to-DAW export + phrase visualizer | Dragging from the plugin window drops a region on a Logic track containing exactly the notes it just played |
+| # | Status | Deliverable | Done when |
+|---|---|---|---|
+| **M0** | ✅ done | Repo scaffold, `prng.js`, Node harness | `hash32(seed, n)` is stable; `mulberry32` reproduces a known sequence |
+| **M1** | ✅ done | Scales + ladder + weighted walk (§4–5) | Property tests pass: every pitch ∈ scale, every pitch ∈ [Low, High], `plan(seed, n)` is bit-identical across runs |
+| **M2** | ✅ done | Rhythm, breath, swing, velocity (§6.1–6.2) | Grid/swing math verified against hand-computed beat positions; note-offs never precede note-ons |
+| **M3** | ✅ done | Motif repetition + chain cap (§6.3) | Cold-planning phrase 200 touches ≤ 3 phrases; repeats are audibly restatements, not clones |
+| **M4** | ✅ done | `tools/render.js` → `.mid` export | A rendered file dragged into Logic plays the same notes the planner printed |
+| **M5** | ✅ done | Scripter wrapper + build (§9) | Loads in the MIDI FX slot, plays through a Logic instrument, survives loop + stop + locate with **zero stuck notes** |
+| **M6** | ⏭ skipped | Musical tuning pass — human in the loop | Section 12 checklist passes — **still owed**, see §12 |
+| **M6.5** | ⏭ skipped | Phase 0.5: Scripter preset + channel strip; Print Settings + full CLI flags (§9.5) | Never implemented — superseded by M9's drag-to-DAW. See the note below. |
+| **M7** | ✅ done | JUCE port (§10) | `auval -v aumi Solo Rmbl` passes; appears in Logic's MIDI FX slot; output matches Scripter for the same seed and params |
+| **M8** | ✅ done | GUI + presets | All **25** parameters bound, automatable, and saved with the project (see the count note below) |
+| **M9** | ← **next** | Drag-to-DAW export + phrase visualizer | Dragging from the plugin window drops a region on a Logic track containing exactly the notes it just played |
 
-M0–M4 require no DAW and no human. Run them to completion first. **M6.5 is a decision point, not a formality** — do it, live with the result for a couple of weeks, and only then decide whether M7 onward is worth your weekends.
+M0–M4 require no DAW and no human. Run them to completion first.
+
+**On M6.5.** This was written as a decision point, not a formality — build it, live with it for a couple of weeks, and only then decide whether M7 onward is worth your weekends. The reasoning stands and is worth reading (§9.5, §10.0) before starting a project like this. **It was not followed.** The port was started directly, on the judgment that M9's drag-to-DAW export replaces Print Settings outright rather than building on it — which makes skipping it coherent rather than an oversight, but does mean Phase 1 was entered without the trial period this section recommends.
+
+**On the parameter count.** M8 originally read "all 26 parameters". There are **25**. Parameter #26 was Print Settings (§7, §9.5.2) — a Scripter-era workaround for getting a take out of Logic without a real plugin. It died with M6.5 and is not coming back; M9 does the same job properly.
+
+**How M7 and M8 were actually accepted.** Both milestones are gated by mechanical harnesses rather than by listening, so that Logic is never the debugger:
+
+| Harness | Proves |
+|---|---|
+| `test/parity.test.js` | `cpp/engine/*.h` ≡ `engine/*.js` — 1,095 combinations (8 scales × 12 roots × 8 seeds, all 6 grids, density/variability/motif corners, a 128-bar cold start). Pitch and velocity exact; floats within 1e-6. |
+| `test/scheduler-parity.test.js` | `cpp/plugin/Scheduler.h` ≡ `scripter/wrapper.js` — 12 host scenarios (straight play, varying block sizes, stop mid-note, 3-pass cycle, locate both directions, latch, mid-play parameter change, reset, pre-roll, and two engine-variety cases) replayed through both and diffed event-for-event. |
+
+The 1e-6 float tolerance is deliberate, not laziness: `std::exp`/`std::pow` are not guaranteed to match V8's to the last ULP, so parity is defined as **identical integer output** — same slot, same pitch, same velocity — with floats compared loosely. Chasing bitwise equality across two language runtimes would be chasing a mirage.
 
 ---
 
@@ -622,18 +705,24 @@ If #7 fails, nothing else matters.
 
 ### A.1 What you need, and when
 
-| Tool | Needed for | Cost |
-|---|---|---|
-| Node.js (LTS) | Phase 0 — the entire musical engine | Free (MIT) · `brew install node` |
-| Logic Pro | Listening; hosts Scripter | Already owned |
-| Xcode | **Phase 1 only** | Free (Mac App Store) |
-| CMake | Phase 1 | Free (BSD) · `brew install cmake` |
-| JUCE 8 | Phase 1 | Free — see A.4 |
-| Apple Developer Program | Nothing here | **Not needed.** Only required to notarize for public distribution |
+*All of this is now installed on the development machine — the "when" column is history, kept because it explains why Phase 0 was designed to need none of it.*
+
+| Tool | Needed for | Status | Cost |
+|---|---|---|---|
+| Node.js (LTS) | Phase 0 — the entire musical engine | ✅ v26 | Free (MIT) · `brew install node` |
+| Logic Pro | Listening; hosts Scripter and the plugin | ✅ | Already owned |
+| Xcode | **Phase 1 only** | ✅ 26.6 | Free (Mac App Store) |
+| CMake | Phase 1 | ✅ 4.4.2 | Free (BSD) · `brew install cmake` |
+| Ninja | Phase 1 — optional, faster incremental builds | ✅ 1.13.2 | Free · `brew install ninja` |
+| JUCE 8 | Phase 1 | ✅ 8.0.15, pinned submodule at `JUCE/` | Free — see A.4 |
+| `auval` | Validating the AU | ✅ ships with macOS at `/usr/bin/auval` | Free |
+| Apple Developer Program | Nothing here | — | **Not needed.** Only required to notarize for public distribution |
 
 **Total cost: $0.**
 
-Phase 0 needs **no Xcode, no CMake, no JUCE** — just Node and Logic. Defer the Xcode download (~15 GB) until M7, when there's finally something to compile. Skip the iOS/watchOS/tvOS platform downloads; this is a macOS-only build.
+Phase 0 needs **no Xcode, no CMake, no JUCE** — just Node and Logic. Defer the Xcode download until M7, when there's finally something to compile. Skip the iOS/watchOS/tvOS platform downloads and the Predictive Code Completion model; this is a macOS-only, CMake-driven build and none of them are used.
+
+**Two setup steps that are easy to miss.** Installing Xcode.app does not repoint the toolchain — if `xcodebuild -version` reports *"requires Xcode, but active developer directory is a command line tools instance"*, run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` (then `sudo xcodebuild -license accept`). And JUCE isn't installed at all in the usual sense: it's source, vendored here as a pinned git submodule, so a fresh clone needs `git submodule update --init --recursive`.
 
 ### A.2 Loop A — the fast loop (Claude Code alone; no Logic, no human)
 
