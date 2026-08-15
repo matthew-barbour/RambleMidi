@@ -150,6 +150,11 @@ void RambleEditor::resized() {
     perf.removeFromTop(8);
     auto bottom = perf.removeFromTop(46);
     seed->setBounds(bottom.removeFromLeft(420).reduced(4, 0));
-    reseedButton.setBounds(bottom.removeFromLeft(110).withSizeKeepingCentre(96, 26));
+    // The neighbouring wrappers reserve a 14px label strip and center a
+    // 24px control below it — give the bare button the same geometry, or it
+    // floats high relative to the Seed bar and Trigger Mode combo.
+    auto reseedCell = bottom.removeFromLeft(110);
+    reseedCell.removeFromTop(14);
+    reseedButton.setBounds(reseedCell.withSizeKeepingCentre(96, 24));
     triggerMode->setBounds(bottom.removeFromLeft(200).reduced(4, 0));
 }
