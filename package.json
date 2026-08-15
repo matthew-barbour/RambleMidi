@@ -4,9 +4,10 @@
   "description": "Ramble — generative solo engine for Logic Pro (AU MIDI FX). Phase 0: pure-JS engine + Scripter wrapper.",
   "private": true,
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/**/*.test.js",
     "build": "node tools/build.js",
     "build:copy": "node tools/build.js --copy",
-    "render": "node tools/render.js"
+    "render": "node tools/render.js",
+    "parity": "node --test test/parity.test.js"
   }
 }

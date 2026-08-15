@@ -54,6 +54,7 @@ const USAGE = `usage: node tools/render.js [options]
   --out FILE          .mid output path (default solo.mid)
   --print             print the note grid and note list
   --no-mid            skip writing the .mid file
+  --json              print the raw event list as JSON (for cross-language parity checks)
   --tempo BPM         tempo written to the .mid (default 120)
 
   engine overrides (0-100 unless noted): --density --note-length(5-150)
@@ -66,7 +67,7 @@ const USAGE = `usage: node tools/render.js [options]
 
 function parseArgs(argv) {
   const params = Planner.defaultParams();
-  const opts = { bars: 8, out: 'solo.mid', print: false, writeMid: true, help: false };
+  const opts = { bars: 8, out: 'solo.mid', print: false, writeMid: true, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
     if (!tok.startsWith('--')) throw new Error(`unexpected argument: ${tok}`);
@@ -74,6 +75,7 @@ function parseArgs(argv) {
     if (name === 'help') { opts.help = true; continue; }
     if (name === 'print') { opts.print = true; continue; }
     if (name === 'no-mid') { opts.writeMid = false; continue; }
+    if (name === 'json') { opts.json = true; continue; }
 
     const value = argv[++i];
     if (value === undefined) throw new Error(`missing value for --${name}`);
@@ -222,6 +224,20 @@ function main() {
     return;
   }
   const { derived, plans, events } = render(params, opts.bars);
+  if (opts.json) {
+    console.log(JSON.stringify({
+      events: events.map((ev) => ({ beat: ev.beat, pitch: ev.pitch, velocity: ev.velocity, durBeats: ev.durBeats }))
+    }));
+    if (opts.writeMid) {
+      const buf = MidiFile.write(events, {
+        tempo: params.tempo,
+        meterNumerator: params.meterNumerator,
+        meterDenominator: params.meterDenominator
+      });
+      fs.writeFileSync(opts.out, buf);
+    }
+    return;
+  }
   if (opts.print) {
     console.log(formatGrid(derived, plans, opts.bars));
     console.log('');
