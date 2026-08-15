@@ -2,6 +2,9 @@
 
 #include "PluginProcessor.h"
 
+#include "PluginEditor.h"
+#include "Presets.h"
+
 RambleAudioProcessor::RambleAudioProcessor()
     : AudioProcessor(BusesProperties()), // a MIDI effect adds no audio buses at all
       apvts(*this, nullptr, "Ramble", ramble::params::createParameterLayout()) {
@@ -100,17 +103,55 @@ void RambleAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
 }
 
 juce::AudioProcessorEditor* RambleAudioProcessor::createEditor() {
-    return new juce::GenericAudioProcessorEditor(*this); // real panel is M8
+    return new RambleEditor(*this);
 }
 
+// ── programs = factory presets ─────────────────────────────────────────────
+
+int RambleAudioProcessor::getNumPrograms() {
+    return ramble::presets::count(); // static table: valid at construction, never changes
+}
+
+void RambleAudioProcessor::setCurrentProgram(int index) {
+    if (index < 0 || index >= ramble::presets::count()) return;
+    currentProgram = index;
+    // Safe inline: the AU wrapper calls this synchronously off the audio
+    // thread, and setValueNotifyingHost's notify chain is thread-hardened.
+    // Gestureless by design (see Presets.h header).
+    ramble::presets::apply(apvts, index);
+}
+
+const juce::String RambleAudioProcessor::getProgramName(int index) {
+    if (index < 0 || index >= ramble::presets::count()) return {};
+    return ramble::presets::table()[static_cast<size_t>(index)].name;
+}
+
+void RambleAudioProcessor::applyFactoryPreset(int index) {
+    setCurrentProgram(index);
+    updateHostDisplay(ChangeDetails().withProgramChanged(true));
+}
+
+// ── state ──────────────────────────────────────────────────────────────────
+
 void RambleAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary(*xml, destData);
+    auto state = apvts.copyState(); // thread-safe snapshot; mutate the copy, not the live tree
+    state.setProperty("currentProgram", currentProgram, nullptr);
+    if (auto xml = state.createXml()) copyXmlToBinary(*xml, destData);
 }
 
 void RambleAudioProcessor::setStateInformation(const void* data, int sizeInBytes) {
     if (auto xml = getXmlFromBinary(data, sizeInBytes)) {
         if (xml->hasTagName(apvts.state.getType())) {
-            apvts.replaceState(juce::ValueTree::fromXml(*xml));
+            auto state = juce::ValueTree::fromXml(*xml);
+            // Restore the menu position only — do NOT setCurrentProgram here,
+            // which would stomp the saved parameter values with preset values.
+            currentProgram = juce::jlimit(0, ramble::presets::count() - 1,
+                static_cast<int>(state.getProperty("currentProgram", 0)));
+            apvts.replaceState(state);
+            // The AU base class resets the host-visible preset to "none" on
+            // every state restore; this is the one call that makes the
+            // wrapper re-read getCurrentProgram().
+            updateHostDisplay(ChangeDetails().withProgramChanged(true));
         }
     }
 }

@@ -39,14 +39,22 @@ public:
     bool isMidiEffect() const override { return true; }
     double getTailLengthSeconds() const override { return 0.0; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return {}; }
-    void changeProgramName(int, const juce::String&) override {}
+    // Programs = factory presets (M8). The AU wrapper publishes these as AU
+    // factory presets, so the recipes appear in Logic's own preset menu.
+    int getNumPrograms() override;
+    int getCurrentProgram() override { return currentProgram; }
+    void setCurrentProgram(int index) override;
+    const juce::String getProgramName(int index) override;
+    void changeProgramName(int, const juce::String&) override {} // factory presets are fixed
+
+    // GUI path: setCurrentProgram + tell the host its preset display is stale
+    // (the AU wrapper only re-reads the program on that notification).
+    void applyFactoryPreset(int index);
 
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
+
+    juce::AudioProcessorValueTreeState& state() { return apvts; }
 
 private:
     // APVTS listener — only Reseed needs one; engine params are change-detected
@@ -61,6 +69,7 @@ private:
     ramble::sched::Scheduler scheduler;
     std::vector<ramble::sched::OutEvent> outEvents; // reused across blocks
     int lastTriggerMode = 0;
+    int currentProgram = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RambleAudioProcessor)
 };

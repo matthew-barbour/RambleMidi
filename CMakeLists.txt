@@ -43,7 +43,9 @@ juce_add_plugin(Ramble
     PRODUCT_NAME "Ramble"
     COPY_PLUGIN_AFTER_BUILD TRUE)  # → ~/Library/Audio/Plug-Ins/Components
 
-target_sources(Ramble PRIVATE cpp/plugin/PluginProcessor.cpp)
+target_sources(Ramble PRIVATE
+    cpp/plugin/PluginEditor.cpp
+    cpp/plugin/PluginProcessor.cpp)
 
 # macOS stamps com.apple.FinderInfo/provenance xattrs onto the fresh bundle,
 # which makes codesign refuse the ad-hoc re-sign ("resource fork, Finder

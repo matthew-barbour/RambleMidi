@@ -245,7 +245,10 @@ editable MIDI, render the same seed and settings with the CLI
 
 ## Recipes
 
-Deltas from the defaults; everything else stays put.
+Deltas from the defaults; everything else stays put. In the JUCE plugin these
+five ship as **factory presets** — pick them from the panel's preset menu or
+from Logic's own plugin header. Presets never touch Seed or Trigger Mode, so
+switching character mid-audition keeps your take.
 
 **Sparse ballad line** — the soloist who leaves space.
 `Density 45 · Note Length 95 · Breath 40 · Phrase Length 4 · Leap 15 ·
