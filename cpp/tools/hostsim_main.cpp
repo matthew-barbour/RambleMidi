@@ -149,6 +149,29 @@ int main() {
                 host.lastBlockEnd = end;
                 start = end;
             }
+        } else if (op == "playrange-jitter") {
+            // Logic's quantized beat clock, as observed in a real session
+            // (see Scheduler.h's PPQ jitter guard): reported block starts
+            // advance by the per-block increment rounded to 1/1024 beat
+            // (drifting a few micro-beats behind), resyncing to the true
+            // position every 8 blocks (jumping a few micro-beats ahead).
+            // Block ends are DERIVED (start + blockBeats), as the JUCE
+            // adapter must derive them. Without the stitch guard this makes
+            // the scheduler flush every note one block after its onset.
+            double from, to, blockBeats;
+            if (!(tok >> from >> to >> blockBeats)) fail("playrange-jitter needs <from> <to> <blockBeats>");
+            const double incQ = std::round(blockBeats * 1024.0) / 1024.0;
+            double reported = from;
+            for (long k = 0;; k++) {
+                double trueStart = from + static_cast<double>(k) * blockBeats;
+                if (trueStart >= to - 1e-9) break;
+                reported = (k % 8 == 0) ? trueStart : reported + incQ;
+                double end = reported + blockBeats;
+                scheduler.processBlock(timingFor(host, true, reported, end),
+                                       effectivePanel(host), host.triggerMode == 1, out);
+                host.lastBlockStart = reported;
+                host.lastBlockEnd = end;
+            }
         } else if (op == "stop") {
             // One stopped block, block beats unchanged — as the mock host does.
             scheduler.processBlock(timingFor(host, false, host.lastBlockStart, host.lastBlockEnd),

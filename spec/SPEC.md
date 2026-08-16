@@ -610,6 +610,7 @@ Verify with `codesign --verify --verbose=2` on the installed copy; it must say *
   ```
 - Parameters via `AudioProcessorValueTreeState` (gives automation + state save/restore for free).
 - **PPQ is 0-based in JUCE, 1-based in Scripter.** Convert once, at the boundary, and comment it loudly.
+- **Logic's block-start PPQs do not tile against derived block ends.** Scripter gets `blockStartBeat` *and* `blockEndBeat` from the host's own clock; a JUCE plugin must derive the end from `numSamples × bpm / sampleRate`, and Logic's reported starts are quantized (observed up to ~6e-5 beats off, both directions). Carrying wrapper.js's 1e-6 backward-jump tolerance over unchanged made the scheduler flush every note one block after its onset — a solo of ~2 ms organ-key ghost clicks that passed auval and both parity suites, because none of them play a jittery transport. `Scheduler.h` stitches sub-`PPQ_STITCH_EPS` (1e-3 beat) discontinuities; `test/scheduler-jitter.test.js` replays the observed Logic clock as a regression, and `ramble-auhost` (a fake-Logic CLI driving the real installed component) reproduces it against the actual AU.
 
 ### GUI (minimal knobs panel)
 

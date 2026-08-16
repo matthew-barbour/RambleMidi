@@ -50,6 +50,10 @@ struct OutEvent {
 
 class Scheduler {
 public:
+    // Threshold separating host-clock jitter from a genuine locate/cycle
+    // jump. See the "HOST PPQ JITTER GUARD" comment in processBlock.
+    static constexpr double PPQ_STITCH_EPS = 1e-3;
+
     // wrapper.js HandleMIDI's note branch (§8.3). Returns true if the event
     // must be swallowed (latch mode: held keys are triggers, they don't
     // sound). Transport-mode passthrough is the caller's job — it owns the
@@ -96,10 +100,29 @@ public:
         double blockStart = info.blockStartBeat;
         double blockEnd = info.blockEndBeat;
 
+        // HOST PPQ JITTER GUARD — a deliberate divergence from wrapper.js.
+        // Scripter receives blockStartBeat AND blockEndBeat from Logic's own
+        // clock, so consecutive blocks tile exactly. Here blockEnd is DERIVED
+        // (ppq + numSamples * bpm / 60 / sampleRate), and Logic's reported
+        // block starts are quantized with periodic resync — observed up to
+        // ~6e-5 beats away from the derived end of the previous block, in
+        // both directions. Left unhandled, the backward case trips the locate
+        // detector below every block, flushing every note one block after its
+        // onset (~2ms organ "ghost clicks" — a real shipped bug); the forward
+        // case opens gaps that can swallow a note outright. Stitch micro
+        // discontinuities so windows tile exactly; only a musically
+        // meaningful jump (> PPQ_STITCH_EPS) is a locate/cycle. 1e-3 beats is
+        // ~500x the observed jitter and far below any real locate or loop.
+        if (lastBlockEnd >= 0 && blockStart != lastBlockEnd &&
+            std::fabs(blockStart - lastBlockEnd) <= PPQ_STITCH_EPS) {
+            blockStart = lastBlockEnd;
+            if (blockEnd < blockStart) blockEnd = blockStart;
+        }
+
         // Cycle jump or locate backward: the timeline went backward under us.
         // Flush everything; plans are position-deterministic so replaying the
         // loop reproduces the identical notes (§3, §8.2).
-        if (lastBlockEnd >= 0 && blockStart < lastBlockEnd - 1e-6) {
+        if (lastBlockEnd >= 0 && blockStart < lastBlockEnd - PPQ_STITCH_EPS) {
             flushAllNotes(blockStart, out);
         }
         lastBlockEnd = blockEnd;

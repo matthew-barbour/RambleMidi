@@ -25,6 +25,15 @@ target_link_libraries(ramble-render PRIVATE ramble_engine)
 add_executable(ramble-hostsim cpp/tools/hostsim_main.cpp)
 target_link_libraries(ramble-hostsim PRIVATE ramble_engine)
 
+# Manual diagnostic: a fake Logic that drives the INSTALLED component through
+# the real AU plumbing, including the quantized-beat-clock model that exposed
+# the ghost-note bug (auval never plays a transport, so it can't catch this
+# class of failure). See the header of auhost_main.mm.
+add_executable(ramble-auhost cpp/tools/auhost_main.mm)
+target_compile_options(ramble-auhost PRIVATE -fobjc-arc)
+target_link_libraries(ramble-auhost PRIVATE
+    "-framework AudioToolbox" "-framework CoreFoundation" "-framework Foundation")
+
 # The plugin (SPEC §10). AU MIDI FX: type aumi, manufacturer Rmbl, code Solo.
 # IS_MIDI_EFFECT alone implies kAudioUnitType_MIDIProcessor in JUCE 8; the
 # explicit AU_MAIN_TYPE is belt + suspenders, because a wrong type is the #1
